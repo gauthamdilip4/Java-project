@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Guess It</title>
+<style>
+  :root{
+    --bg:#000; --fg:#fff; --muted:#8a8a8a; --line:#333;
+    --correct:#2e7d32; --present:#b59f3b; --absent:#3a3a3c;
+    --tile:min(78px,15vw);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:"Segoe UI",Arial,Helvetica,sans-serif;}
+  body{min-height:100vh;display:flex;justify-content:center;}
+  main{width:100%;max-width:520px;padding:28px 16px 32px;text-align:center;}
+  h1{margin:8px 0 14px;font-size:42px;letter-spacing:1px;font-weight:800}
+  .sub{color:var(--muted);font-size:15px;margin:0 0 26px}
+  #grid{display:grid;grid-template-rows:repeat(6,var(--tile));gap:8px;
+    justify-content:center;margin:0 auto 26px}
+  .row{display:grid;grid-template-columns:repeat(5,var(--tile));gap:8px}
+  .tile{width:var(--tile);height:var(--tile);border:2px solid var(--line);
+    display:flex;align-items:center;justify-content:center;
+    font-size:calc(var(--tile)*.45);font-weight:700;text-transform:uppercase;
+    transition:background .3s,border-color .3s}
+  .tile.filled{border-color:#666}
+  .tile.correct{background:var(--correct);border-color:var(--correct)}
+  .tile.present{background:var(--present);border-color:var(--present)}
+  .tile.absent{background:var(--absent);border-color:var(--absent)}
+  .tile.pop{animation:pop .12s ease}
+  @keyframes pop{50%{transform:scale(1.08)}}
+  .row.shake{animation:shake .4s}
+  @keyframes shake{20%,60%{transform:translateX(-6px)}40%,80%{transform:translateX(6px)}}
+  #msg{font-weight:700;font-size:18px;min-height:26px;margin-bottom:14px}
+  #new{background:transparent;color:var(--fg);border:1px solid #fff;
+    padding:11px 34px;font-weight:700;font-size:15px;letter-spacing:.5px;
+    cursor:pointer;text-transform:uppercase}
+  #new:hover{background:#fff;color:#000}
+  #stats{color:var(--muted);font-size:14px;margin-top:14px}
+  #kb{margin:26px auto 0;display:flex;flex-direction:column;gap:6px;align-items:center}
+  .kr{display:flex;gap:5px}
+  .key{background:#1c1c1e;color:#fff;border:0;border-radius:4px;height:46px;
+    min-width:min(34px,8vw);padding:0 8px;font-weight:700;font-size:14px;
+    cursor:pointer;text-transform:uppercase}
+  .key.wide{min-width:min(58px,13vw);font-size:12px}
+  .key.correct{background:var(--correct)}
+  .key.present{background:var(--present)}
+  .key.absent{background:#111;color:#666}
+</style>
+</head>
+<body>
+<main>
+  <h1>GUESS IT</h1>
+  <p class="sub">Type a 5-letter word and press Enter</p>
+  <div id="grid" aria-label="Guess grid"></div>
+  <div id="msg" role="status" aria-live="polite">Loading words…</div>
+  <button id="new" type="button">New Game</button>
+  <div id="stats"></div>
+  <div id="kb"></div>
+</main>
+
+<script>
+(function(){
+  var ROWS=6, COLS=5;
+  var FALLBACK=["APPLE","BRAVE","CRANE","DREAM","EARTH","FLAME","GRAPE","HOUSE","IMAGE","JOKER",
+    "KNIFE","LEMON","MANGO","NIGHT","OCEAN","PLANT","QUEEN","RIVER","STONE","TIGER",
+    "UNITY","VIDEO","WORLD","YOUTH","ZEBRA"];
+  var words=[], wordSet=null, target="", row=0, col=0, over=true, cells=[], keyState={};
+  var $grid=document.getElementById("grid"), $msg=document.getElementById("msg"),
+      $stats=document.getElementById("stats"), $kb=document.getElementById("kb");
+
+  /* ---- stats (saved in this browser) ---- */
+  var stats={played:0,won:0};
+  try{var s=JSON.parse(localStorage.getItem("guessit_stats")||"null"); if(s) stats=s;}catch(e){}
+  function saveStats(){try{localStorage.setItem("guessit_stats",JSON.stringify(stats));}catch(e){}}
+  function showStats(){$stats.textContent="Played: "+stats.played+"   Won: "+stats.won;}
+
+  /* ---- build grid + keyboard ---- */
+  function buildGrid(){
+    $grid.innerHTML=""; cells=[];
+    for(var r=0;r<ROWS;r++){
+      var rowEl=document.createElement("div"); rowEl.className="row";
+      var rc=[];
+      for(var c=0;c<COLS;c++){
+        var t=document.createElement("div"); t.className="tile"; rowEl.appendChild(t); rc.push(t);
+      }
+      $grid.appendChild(rowEl); cells.push(rc);
+    }
+  }
+  var KEYROWS=["QWERTYUIOP","ASDFGHJKL","*ZXCVBNM<"];
+  var keyEls={};
+  function buildKb(){
+    $kb.innerHTML=""; keyEls={};
+    KEYROWS.forEach(function(r){
+      var d=document.createElement("div"); d.className="kr";
+      r.split("").forEach(function(ch){
+        var b=document.createElement("button"); b.type="button"; b.className="key";
+        if(ch==="*"){b.textContent="Enter"; b.classList.add("wide"); b.onclick=function(){press("ENTER")};}
+        else if(ch==="<"){b.textContent="⌫"; b.classList.add("wide"); b.onclick=function(){press("BACK")};}
+        else{b.textContent=ch; keyEls[ch]=b; b.onclick=function(){press(ch)};}
+        d.appendChild(b);
+      });
+      $kb.appendChild(d);
+    });
+  }
+
+  /* ---- game flow ---- */
+  function newGame(){
+    if(!words.length) return;
+    target=words[Math.floor(Math.random()*words.length)];
+    row=0; col=0; over=false; keyState={};
+    buildGrid(); buildKb();
+    $msg.textContent="Guess the word!";
+    showStats();
+  }
+
+  function evaluate(guess){
+    var res=new Array(COLS).fill("absent"), pool={}, i;
+    for(i=0;i<COLS;i++){
+      if(guess[i]===target[i]) res[i]="correct";
+      else pool[target[i]]=(pool[target[i]]||0)+1;
+    }
+    for(i=0;i<COLS;i++){
+      if(res[i]==="correct") continue;
+      if(pool[guess[i]]>0){res[i]="present"; pool[guess[i]]--;}
+    }
+    return res;
+  }
+
+  function paintKey(ch,state){
+    var rank={absent:1,present:2,correct:3};
+    if(keyState[ch] && rank[keyState[ch]]>=rank[state]) return;
+    keyState[ch]=state;
+    var el=keyEls[ch]; if(!el) return;
+    el.classList.remove("absent","present","correct"); el.classList.add(state);
+  }
+
+  function submit(){
+    if(col<COLS){shake("Not enough letters"); return;}
+    var guess=cells[row].map(function(t){return t.textContent;}).join("");
+    if(!wordSet.has(guess)){shake("Not in word list"); return;}
+    var res=evaluate(guess);
+    for(var i=0;i<COLS;i++){
+      cells[row][i].classList.add(res[i]);
+      paintKey(guess[i],res[i]);
+    }
+    if(guess===target){
+      over=true; stats.played++; stats.won++; saveStats(); showStats();
+      $msg.textContent="You won in "+(row+1)+(row===0?" try!":" tries!"); return;
+    }
+    row++; col=0;
+    if(row===ROWS){
+      over=true; stats.played++; saveStats(); showStats();
+      $msg.textContent="Game over! The word was "+target;
+    } else $msg.textContent="Guess the word!";
+  }
+
+  function shake(text){
+    $msg.textContent=text;
+    var rowEl=$grid.children[row]; rowEl.classList.remove("shake");
+    void rowEl.offsetWidth; rowEl.classList.add("shake");
+  }
+
+  function press(k){
+    if(over||!words.length) return;
+    if(k==="ENTER"){submit(); return;}
+    if(k==="BACK"){
+      if(col>0){col--; var t=cells[row][col]; t.textContent=""; t.classList.remove("filled");}
+      return;
+    }
+    if(/^[A-Z]$/.test(k) && col<COLS){
+      var tile=cells[row][col]; tile.textContent=k; tile.classList.add("filled","pop");
+      setTimeout(function(){tile.classList.remove("pop");},130);
+      col++;
+    }
+  }
+
+  document.addEventListener("keydown",function(e){
+    if(e.ctrlKey||e.metaKey||e.altKey) return;
+    if(e.key==="Enter"){e.preventDefault(); press("ENTER");}
+    else if(e.key==="Backspace"){press("BACK");}
+    else if(/^[a-zA-Z]$/.test(e.key)){press(e.key.toUpperCase());}
+  });
+  document.getElementById("new").addEventListener("click",function(){this.blur(); newGame();});
+
+  /* ---- load the dictionary from the repo (wordle_words.txt) ---- */
+  function parseWords(text){
+    var out=[], seen={};
+    text.split(/\r?\n/).forEach(function(line){
+      var m=line.trim().match(/^[A-Za-z]{5}(?![A-Za-z])/);
+      if(m){var w=m[0].toUpperCase(); if(!seen[w]){seen[w]=1; out.push(w);}}
+    });
+    return out;
+  }
+  buildGrid(); buildKb(); showStats();
+  fetch("wordle_words.txt",{cache:"no-store"})
+    .then(function(r){if(!r.ok) throw new Error(r.status); return r.text();})
+    .then(function(t){var w=parseWords(t); if(w.length<5) throw new Error("empty"); return w;})
+    .catch(function(){return FALLBACK;})
+    .then(function(w){words=w; wordSet=new Set(w); newGame();});
+})();
+</script>
+</body>
+</html>
